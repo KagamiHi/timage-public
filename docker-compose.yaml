@@ -1,0 +1,140 @@
+x-minio-env-vars: &minio-env-vars
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+x-environment: &env
+  env_file: ${ENV_FILE}
+  environment:
+    <<: *minio-env-vars
+    POSTGRES_HOST: db
+    REDIS_URL: redis://redis:6379
+    MINIO_ENDPOINT: s3:9000
+  restart: unless-stopped
+
+x-django: &django
+  <<: *env
+  image: ${REGISTRY_PATH:-}backend:${BUILD_TAG}
+  build:
+    dockerfile: ./dockerfiles/django.Dockerfile
+    args:
+      EXTERNAL_HOST: ${EXTERNAL_HOST}
+      VITE_HOST_PREFIX: https
+
+x-hc-params: &hc-params
+  interval: 5s
+  timeout: 5s
+  retries: 10
+
+services:
+  web:
+    image: ${REGISTRY_PATH:-}backend:${BUILD_TAG}
+    <<: *django
+    command: ./run/gunicorn.sh
+    healthcheck:
+      test: "curl --fail http://0.0.0.0:8001/health/ || exit 1"
+      interval: 120s
+      retries: 10
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.django-${BUILD_TAG}.rule=Host(`${EXTERNAL_HOST}`)"
+        - "traefik.http.services.django-${BUILD_TAG}.loadbalancer.server.port=8001"
+        - "traefik.http.routers.django-${BUILD_TAG}.entrypoints=websecure"
+        - "traefik.http.routers.django-${BUILD_TAG}.tls.certresolver=myresolver"
+    networks:
+      - backend
+      - traefik-net
+    depends_on:
+      - db
+      - s3
+
+  s3:
+    environment:
+      <<: *minio-env-vars
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+    networks:
+      - backend
+      - traefik-net
+    volumes:
+      - minio-data:/data
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.minio-${BUILD_TAG}.loadbalancer.server.port=9000"
+        - "traefik.http.routers.minio-${BUILD_TAG}.rule=Host(`${EXTERNAL_HOST}`) && PathPrefix(`/cdn`)"
+        - "traefik.http.middlewares.strip-cdn-${BUILD_TAG}.stripPrefix.prefixes=/cdn"
+        - "traefik.http.routers.minio-${BUILD_TAG}.middlewares=strip-cdn-${BUILD_TAG}"
+        - "traefik.http.routers.minio-${BUILD_TAG}.entrypoints=websecure"
+        - "traefik.http.routers.minio-${BUILD_TAG}.tls.certresolver=myresolver"
+
+  redis:
+    image: redis:latest
+    restart: unless-stopped
+    healthcheck:
+      test: redis-cli ping || exit 1
+      <<: *hc-params
+    networks:
+      - backend
+
+  celery:
+    <<: *django
+    command: ./run/celery.sh
+    networks:
+      - backend
+
+  db:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    image: postgres:17
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres" ]
+      <<: *hc-params
+    networks:
+      - backend
+    volumes:
+      - postgresql:/var/lib/postgresql/data
+
+  tlg-bot:
+    image: ${REGISTRY_PATH:-}backend:${BUILD_TAG}
+    <<: *django
+    command: uv run manage.py run_bot
+    networks:
+      - backend
+      - traefik-net
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.tlg-bot-${BUILD_TAG}.loadbalancer.server.port=8002"
+        - "traefik.http.routers.tlg-bot-${BUILD_TAG}.rule=Host(`${EXTERNAL_HOST}`) && PathPrefix(`/bot`)"
+        - "traefik.http.middlewares.strip-bot.stripPrefix.prefixes=/bot"
+        - "traefik.http.routers.tlg-bot-${BUILD_TAG}.middlewares=strip-bot"
+        - "traefik.http.routers.tlg-bot-${BUILD_TAG}.entrypoints=websecure"
+        - "traefik.http.routers.tlg-bot-${BUILD_TAG}.tls.certresolver=myresolver"
+    depends_on:
+      - db
+
+  catcher: # WIP: not yet production-ready
+    image: ${REGISTRY_PATH:-}backend:${BUILD_TAG}
+    <<: *django
+    command: uv run manage.py run_catcher
+    networks:
+      - backend
+    depends_on:
+      - db
+      - s3
+
+networks:
+  backend:
+  traefik-net:
+    external: true
+
+volumes:
+  postgresql:
+    driver: local
+  minio-data:
+    driver: local

@@ -1,0 +1,60 @@
+services:
+  web:
+    command: ./run/ngrok.sh
+    healthcheck:
+      disable: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.django-ngrok.rule=Host(`${EXTERNAL_HOST}`)"
+      - "traefik.http.services.django-ngrok.loadbalancer.server.port=8001"
+      - "traefik.http.routers.django-ngrok.entrypoints=web"
+
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  s3:
+    ports:
+      - "9000:9000" # MinIO API
+      - "9001:9001" # MinIO Console
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.minio-ngrok.loadbalancer.server.port=9000"
+      - "traefik.http.routers.minio-ngrok.rule=Host(`${EXTERNAL_HOST}`) && PathPrefix(`/cdn`)"
+      - "traefik.http.middlewares.strip-cdn-ngrok.stripPrefix.prefixes=/cdn"
+      - "traefik.http.routers.minio-ngrok.middlewares=strip-cdn-ngrok"
+      - "traefik.http.routers.minio-ngrok.entrypoints=web"
+
+  tlg-bot:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.tlg-bot-ngrok.loadbalancer.server.port=8002"
+      - "traefik.http.routers.tlg-bot-ngrok.rule=Host(`${EXTERNAL_HOST}`) && PathPrefix(`/bot`)"
+      - "traefik.http.middlewares.strip-bot-ngrok.stripPrefix.prefixes=/bot"
+      - "traefik.http.routers.tlg-bot-ngrok.middlewares=strip-bot-ngrok"
+      - "traefik.http.routers.tlg-bot-ngrok.entrypoints=web"
+
+  catcher:
+    command: ["sh", "-c", "echo 'catcher disabled in ngrok mode' && sleep infinity"]
+
+  traefik:
+    image: "traefik:v3"
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik-net"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    networks:
+      - traefik-net
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+networks:
+  traefik-net:
+    driver: bridge

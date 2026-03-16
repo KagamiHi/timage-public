@@ -1,0 +1,32 @@
+services:
+  web:
+    command: ./run/local.sh
+    build:
+      args:
+        EXTERNAL_HOST: localhost:8001
+        VITE_HOST_PREFIX: http
+    environment:
+      LOCAL: "1"
+      CDN_EXTERNAL_ENDPOINT: http://localhost:9000
+    ports:
+      - "8001:8001"
+
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  s3:
+    ports:
+      - "9000:9000" # MinIO API
+      - "9001:9001" # MinIO Console
+
+  catcher:
+    command: [ "sh", "-c", "echo 'catcher disabled in local' && sleep infinity" ]
+    deploy:
+      restart_policy:
+        condition: none
+

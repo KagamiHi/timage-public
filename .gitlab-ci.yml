@@ -1,0 +1,109 @@
+default:
+  image: docker:28.1.1
+  services:
+    - name: docker:28.1.1-dind
+      alias: docker
+  cache:
+    paths:
+      - /root/.cache/uv
+      - /root/.cache/pnpm
+  before_script:
+    # ssh
+    - apk update && apk add apache2-utils gettext
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    # registry auth
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+
+.prod-variables: &prod-variables
+  # envsubst
+  BUILD_TAG: latest
+  EXTERNAL_HOST: $PROD_EXTERNAL_HOST
+  # SCALE_FACTOR: 1
+  # SENTRY_ENV: production
+  # deploy
+  STACK_NAME: timage_prod
+
+variables:
+  REGISTRY_PATH: ${CI_REGISTRY_IMAGE}/
+
+stages:
+  - build-and-deploy-traefik
+  - deploy
+
+.build-project: &build-project
+  # build and push django image
+  - docker build --build-arg EXTERNAL_HOST=$EXTERNAL_HOST -t ${REGISTRY_PATH}backend:${BUILD_TAG} -f dockerfiles/django.Dockerfile .
+  - docker push ${REGISTRY_PATH}backend:${BUILD_TAG}
+
+.predeploy: &predeploy
+  # set host
+  - export DOCKER_HOST=ssh://root@$SERVER_IP
+  - echo "$SERVER_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+  - ssh -o BatchMode=yes -o ConnectTimeout=5 root@$SERVER_IP true 2>&1
+  # prepare traefik compose file
+  - envsubst < docker-compose.traefik.yaml > /tmp/docker-compose.traefik.yaml
+  - mv /tmp/docker-compose.traefik.yaml docker-compose.traefik.yaml
+  # prepare project compose file
+  - envsubst < docker-compose.yaml > /tmp/docker-compose.yaml
+  - mv /tmp/docker-compose.yaml docker-compose.yaml
+
+.deploy: &deploy
+  # create .env
+  - true > $ENV_FILE
+  - echo "EXTERNAL_HOST=$EXTERNAL_HOST" >> $ENV_FILE
+  - echo "COMMIT_HASH=$CI_COMMIT_SHORT_SHA" >> $ENV_FILE
+  # project variables
+  - echo "SECRET_KEY=$SECRET_KEY" >> $ENV_FILE
+  - echo "SENTRY_DSN=$SENTRY_DSN" >> $ENV_FILE
+  - echo "BOT_TOKEN=$BOT_TOKEN" >> $ENV_FILE
+  - echo "TLG_LONG_POLLING=$TLG_LONG_POLLING" >> $ENV_FILE
+  - echo "WEBHOOK_SECRET=$WEBHOOK_SECRET" >> $ENV_FILE
+  # postgres
+  - echo "POSTGRES_USER=$POSTGRES_USER" >> $ENV_FILE
+  - echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" >> $ENV_FILE
+  - echo "POSTGRES_DB=$POSTGRES_DB" >> $ENV_FILE
+  - echo "POSTGRES_PORT=$POSTGRES_PORT" >> $ENV_FILE
+  # minio
+  - echo "MINIO_ENDPOINT=$MINIO_ENDPOINT" >> $ENV_FILE
+  - echo "MINIO_ROOT_USER=$MINIO_ROOT_USER" >> $ENV_FILE
+  - echo "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" >> $ENV_FILE
+  # redis
+  - echo "REDIS_HOST=$REDIS_HOST" >> $ENV_FILE
+  # telethon and session
+  - echo "API_ID=$API_ID" >> $ENV_FILE
+  - echo "API_HASH=$API_HASH" >> $ENV_FILE
+  - echo "SESSION_NAME=$SESSION_NAME" >> $ENV_FILE
+  # deploy
+  - docker stack deploy --with-registry-auth -c docker-compose.yaml --prune --detach=false $STACK_NAME
+
+deploy-traefik-prod:
+  stage: build-and-deploy-traefik
+  needs: [ ]
+  script:
+    - *predeploy
+    - docker stack deploy -c docker-compose.traefik.yaml --prune --detach=false traefik
+  only:
+    - main
+  resource_group: main
+
+build-prod:
+  stage: build-and-deploy-traefik
+  needs: [ ]
+  variables: *prod-variables
+  script:
+    - *build-project
+  only:
+    - main
+
+deploy-to-prod:
+  stage: deploy
+  needs: [ build-prod ]
+  variables: *prod-variables
+  script:
+    - *predeploy
+    - *deploy
+  only:
+    - main
+  resource_group: main

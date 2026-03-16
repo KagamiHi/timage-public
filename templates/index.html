@@ -1,0 +1,22 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset='utf-8'>
+    <meta name="viewport" content="width=device-width, initial-scale=1 minimum-scale=1 maximum-scale=1"/>
+    <title>Timage</title>
+    <link rel='stylesheet' href="{% static '/assets/index.css' %}?{{ hash }}">
+</head>
+
+<body>
+<div id="app"></div>
+<script defer type="module" src="{% static '/assets/index.js' %}?{{ hash }}"></script>
+{% if debug %}
+    <script src="//cdn.jsdelivr.net/npm/eruda"></script>
+    <script>
+        eruda.init();
+    </script>
+{% endif %}
+</body>
+</html>

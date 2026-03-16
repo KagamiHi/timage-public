@@ -1,0 +1,19 @@
+[
+{
+  "model": "users.user",
+  "pk": "019cf677-d51f-742c-bafd-3994c3f0c07d",
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": true,
+    "tlg_id": 1,
+    "tlg_username": "localtest",
+    "language_code": "en",
+    "is_premium": false,
+    "is_active": true,
+    "is_staff": true,
+    "groups": [],
+    "user_permissions": []
+  }
+}
+]
